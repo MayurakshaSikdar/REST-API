@@ -5,6 +5,8 @@ const {
     validationResult
 } = require('express-validator');
 
+const io = require('../socket');
+
 const Post = require('../models/post');
 const User = require('../models/user');
 
@@ -29,7 +31,8 @@ exports.getPosts = (req, res, next) => {
                     select: 'name'
                 })
                 .skip((currentPage - 1) * perPage)
-                .limit(perPage);
+                .limit(perPage)
+                .sort({createdAt: -1});
         })
         .then(posts => {
             if (!posts) {
@@ -44,11 +47,11 @@ exports.getPosts = (req, res, next) => {
                 });
         })
         .catch(err => {
-            catchError(err);
+            catchError(err, next);
         })
 
         .catch(err => {
-            catchError(err);
+            catchError(err, next);
         });
 };
 
@@ -85,17 +88,29 @@ exports.createPost = (req, res, next) => {
             if (!user) {
                 thenError('User not found.', 500, []);
             }
-
+            
             creator = user;
-
+            
             user.posts.push(post)
-
+            
             return user.save()
         })
         .then(result => {
             if (!result) {
                 thenError('User post not saved.', 500, []);
             }
+            
+            io.getIO().emit('posts', {
+                action: 'create',
+                post: {
+                    ...post._doc,
+                    creator: {
+                        _id: req.userId,
+                        name: result.name
+                    }
+                }
+            });
+
             res.status(201).json({
                 message: 'Post created successfully!',
                 post: post,
@@ -106,7 +121,7 @@ exports.createPost = (req, res, next) => {
             });
         })
         .catch(err => {
-            catchError(err);
+            catchError(err, next);
         });
 };
 
@@ -123,7 +138,7 @@ exports.getPost = (req, res, next) => {
             });
         })
         .catch(err => {
-            catchError(err);
+            catchError(err, next);
         });
 };
 
@@ -152,12 +167,13 @@ exports.updatePost = (req, res, next) => {
 
 
     Post.findById(postId)
+        .populate('creator')
         .then(post => {
             if (!post) {
                 thenError('Could not find post.', 422, errors.array());
             }
 
-            if (post.creator.toString() !== userId) {
+            if (post.creator._id.toString() !== userId) {
                 thenError('Could not find post', 403, []);
             }
 
@@ -170,13 +186,18 @@ exports.updatePost = (req, res, next) => {
             return post.save();
         })
         .then(result => {
+            io.getIO().emit('posts', {
+                action: 'update',
+                post: result
+            });
+            
             res.status(200).json({
                 message: 'Post created successfully!',
                 post: result
             });
         })
         .catch(err => {
-            catchError(err);
+            catchError(err, next);
         });
 }
 
@@ -190,7 +211,7 @@ exports.postDelete = (req, res, next) => {
             if (!post) {
                 thenError('Could not find post.', 422, errors.array());
             }
-            if (post.creator.toString() !== userId) {
+            if (post.creator.toString() !== userId.toString()) {
                 thenError('Not Authorized', 403, []);
             }
 
@@ -201,16 +222,20 @@ exports.postDelete = (req, res, next) => {
             return User.findById(userId);
         })
         .then(user => {
-            user.posts.pull((postId));
+            user.posts.pull(postId);
             return user.save()
         })
         .then(result => {
+            io.getIO().emit('posts', {
+                action: 'delete',
+                post: postId
+            })
             res.status(200).json({
                 message: 'Post Deleted'
             })
         })
         .catch((err) => {
-            catchError(err);
+            catchError(err, next);
         });
 }
 
@@ -226,7 +251,7 @@ const clearImage = (filePath) => {
 
 
 
-const catchError = error => {
+const catchError = (error, next) => {
     if (!error.statusCode) {
         error.statusCode = 500;
     }

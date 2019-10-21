@@ -11,7 +11,6 @@ const User = require('../models/user');
 
 
 exports.login = (req, res, next) => {
-    console.log('hello')
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         thenError('Validation Failed. Login failed.', 422, errors.array());
